@@ -1,5 +1,5 @@
 # =========================================
-# WINDOWS RECOMMENDATION AUDIT
+# WINDOWS HARDWARE RECOMMENDATION AUDIT
 # =========================================
 
 Clear-Host
@@ -21,50 +21,78 @@ Write-Host "===== HARDWARE AUDIT =====" -ForegroundColor Cyan
 Write-Host ""
 
 # =========================================
-# SYSTEM INFO
+# CPU
 # =========================================
 
 $CPU = Get-CimInstance Win32_Processor
-$RAM = Get-CimInstance Win32_ComputerSystem
-$Disk = Get-CimInstance Win32_DiskDrive
-$TPM = Get-Tpm -ErrorAction SilentlyContinue
 
 $CPUName = $CPU.Name.Trim()
 $Cores = $CPU.NumberOfCores
 $Threads = $CPU.NumberOfLogicalProcessors
 
+# =========================================
+# RAM
+# =========================================
+
+$RAM = Get-CimInstance Win32_ComputerSystem
 $RAMGB = [math]::Round($RAM.TotalPhysicalMemory / 1GB)
+
+# =========================================
+# SYSTEM DRIVE DETECTION
+# ONLY CHECK WINDOWS DRIVE
+# =========================================
 
 $DiskType = "Unknown"
 
-foreach ($d in $Disk) {
+try {
 
-    if ($d.MediaType -match "SSD") {
+    $SystemPartition = Get-Partition -DriveLetter C
+    $SystemDisk = Get-Disk -Number $SystemPartition.DiskNumber
+
+    $DiskName = $SystemDisk.FriendlyName
+
+    if ($DiskName -match "SSD|NVMe") {
         $DiskType = "SSD"
     }
-
-    elseif ($d.Model -match "NVMe") {
-        $DiskType = "NVMe"
-    }
-
-    elseif ($d.MediaType -match "HDD|Fixed") {
-        if ($DiskType -eq "Unknown") {
-            $DiskType = "HDD"
-        }
+    else {
+        $DiskType = "HDD"
     }
 }
+catch {
+
+    $DiskType = "Unknown"
+}
+
+# =========================================
+# TPM
+# =========================================
 
 $TPMEnabled = $false
 
-if ($TPM) {
-    $TPMEnabled = $TPM.TpmPresent
+try {
+
+    $TPM = Get-Tpm
+
+    if ($TPM.TpmPresent) {
+        $TPMEnabled = $true
+    }
 }
+catch {
+    $TPMEnabled = $false
+}
+
+# =========================================
+# WINDOWS VERSION
+# =========================================
+
+$OS = Get-CimInstance Win32_OperatingSystem
 
 # =========================================
 # DISPLAY INFO
 # =========================================
 
 Write-Host "Computer : $env:COMPUTERNAME"
+Write-Host "OS       : $($OS.Caption)"
 Write-Host "CPU      : $CPUName"
 Write-Host "Cores    : $Cores"
 Write-Host "Threads  : $Threads"
@@ -73,7 +101,7 @@ Write-Host "Storage  : $DiskType"
 Write-Host "TPM      : $TPMEnabled"
 
 # =========================================
-# WINDOWS RECOMMENDATION
+# CLASSIFICATION
 # =========================================
 
 Write-Host ""
@@ -83,9 +111,9 @@ Write-Host ""
 $Recommendation = ""
 $Level = ""
 
-# -----------------------------------------
-# VERY OLD PC
-# -----------------------------------------
+# =========================================
+# LOW-END
+# =========================================
 
 if (
     $RAMGB -le 4 -or
@@ -97,23 +125,23 @@ if (
     $Recommendation = @"
 Recommended:
 - Windows 10 Pro
-- Office Web
+- Office Web Apps
 - Office LTSC light usage
 - Avoid Windows 11
 - Avoid heavy security stack
-- Upgrade SSD strongly recommended
+- SSD upgrade strongly recommended
 "@
 
     Warn "Low-end machine detected"
 }
 
-# -----------------------------------------
-# MID RANGE
-# -----------------------------------------
+# =========================================
+# MID-RANGE
+# =========================================
 
 elseif (
     $RAMGB -ge 8 -and
-    $DiskType -match "SSD|NVMe"
+    $DiskType -eq "SSD"
 ) {
 
     $Level = "MID"
@@ -130,13 +158,13 @@ Recommended:
     Good "Mid-range machine detected"
 }
 
-# -----------------------------------------
-# HIGH END
-# -----------------------------------------
+# =========================================
+# HIGH-END
+# =========================================
 
 if (
     $RAMGB -ge 16 -and
-    $DiskType -match "SSD|NVMe" -and
+    $DiskType -eq "SSD" -and
     $TPMEnabled
 ) {
 
@@ -155,19 +183,22 @@ Recommended:
 }
 
 # =========================================
-# OUTPUT
+# SHOW RESULT
 # =========================================
 
 Write-Host ""
 Write-Host $Recommendation -ForegroundColor White
 
 # =========================================
-# JSON EXPORT
+# JSON OUTPUT
 # =========================================
 
 $Output = [PSCustomObject]@{
     Computer = $env:COMPUTERNAME
+    OS = $OS.Caption
     CPU = $CPUName
+    Cores = $Cores
+    Threads = $Threads
     RAMGB = $RAMGB
     Disk = $DiskType
     TPM = $TPMEnabled
