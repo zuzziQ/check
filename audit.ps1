@@ -1,15 +1,8 @@
 # =========================================
-# WINDOWS / OFFICE ACTIVATION AUDIT
+# WINDOWS RECOMMENDATION AUDIT
 # =========================================
 
 Clear-Host
-
-$Risk = 0
-$Findings = @()
-
-function Info($msg) {
-    Write-Host "[INFO] $msg" -ForegroundColor Cyan
-}
 
 function Good($msg) {
     Write-Host "[ OK ] $msg" -ForegroundColor Green
@@ -24,198 +17,166 @@ function Bad($msg) {
 }
 
 Write-Host ""
-Write-Host "===== ACTIVATION AUDIT =====" -ForegroundColor White
+Write-Host "===== HARDWARE AUDIT =====" -ForegroundColor Cyan
 Write-Host ""
 
 # =========================================
-# LICENSE CHECK
+# SYSTEM INFO
 # =========================================
 
-Info "Checking installed licenses..."
+$CPU = Get-CimInstance Win32_Processor
+$RAM = Get-CimInstance Win32_ComputerSystem
+$Disk = Get-CimInstance Win32_DiskDrive
+$TPM = Get-Tpm -ErrorAction SilentlyContinue
 
-$items = Get-CimInstance SoftwareLicensingProduct |
-Where-Object {
-    $_.PartialProductKey
-}
+$CPUName = $CPU.Name.Trim()
+$Cores = $CPU.NumberOfCores
+$Threads = $CPU.NumberOfLogicalProcessors
 
-$LicenseResults = @()
+$RAMGB = [math]::Round($RAM.TotalPhysicalMemory / 1GB)
 
-foreach ($i in $items) {
+$DiskType = "Unknown"
 
-    Write-Host ""
-    Write-Host "----------------------------------" -ForegroundColor DarkGray
+foreach ($d in $Disk) {
 
-    $status = switch ($i.LicenseStatus) {
-        0 { "Unlicensed" }
-        1 { "Licensed" }
-        2 { "OOB Grace" }
-        3 { "OOT Grace" }
-        4 { "Non-Genuine Grace" }
-        5 { "Notification" }
-        6 { "Extended Grace" }
-        default { "Unknown" }
+    if ($d.MediaType -match "SSD") {
+        $DiskType = "SSD"
     }
 
-    Write-Host "Name        : $($i.Name)"
-    Write-Host "Description : $($i.Description)"
-    Write-Host "Status      : $status"
-    Write-Host "Partial Key : $($i.PartialProductKey)"
-
-    $Channel = "Unknown"
-
-    if ($i.Description -match "RETAIL") {
-        $Channel = "Retail"
-        Good "Retail license"
+    elseif ($d.Model -match "NVMe") {
+        $DiskType = "NVMe"
     }
 
-    elseif ($i.Description -match "OEM_DM|OEM") {
-        $Channel = "OEM"
-        Good "OEM factory license"
-    }
-
-    elseif ($i.Description -match "VOLUME_MAK") {
-        $Channel = "MAK"
-        Warn "MAK volume license"
-        $Risk += 1
-        $Findings += "MAK license detected"
-    }
-
-    elseif ($i.Description -match "VOLUME_KMSCLIENT") {
-        $Channel = "KMS"
-        Bad "KMS client activation detected"
-        $Risk += 3
-        $Findings += "KMS activation detected"
-    }
-
-    $LicenseResults += [PSCustomObject]@{
-        Name = $i.Name
-        Channel = $Channel
-        Status = $status
-        PartialKey = $i.PartialProductKey
+    elseif ($d.MediaType -match "HDD|Fixed") {
+        if ($DiskType -eq "Unknown") {
+            $DiskType = "HDD"
+        }
     }
 }
 
+$TPMEnabled = $false
+
+if ($TPM) {
+    $TPMEnabled = $TPM.TpmPresent
+}
+
 # =========================================
-# SLMGR CHECK
+# DISPLAY INFO
+# =========================================
+
+Write-Host "Computer : $env:COMPUTERNAME"
+Write-Host "CPU      : $CPUName"
+Write-Host "Cores    : $Cores"
+Write-Host "Threads  : $Threads"
+Write-Host "RAM      : $RAMGB GB"
+Write-Host "Storage  : $DiskType"
+Write-Host "TPM      : $TPMEnabled"
+
+# =========================================
+# WINDOWS RECOMMENDATION
 # =========================================
 
 Write-Host ""
-Info "Running slmgr /xpr..."
+Write-Host "===== RECOMMENDATION =====" -ForegroundColor Cyan
+Write-Host ""
 
-$xpr = cscript.exe //Nologo C:\Windows\System32\slmgr.vbs /xpr
+$Recommendation = ""
+$Level = ""
 
-if ($xpr -match "permanently activated") {
-    Good "Windows permanently activated"
+# -----------------------------------------
+# VERY OLD PC
+# -----------------------------------------
+
+if (
+    $RAMGB -le 4 -or
+    $DiskType -eq "HDD"
+) {
+
+    $Level = "LOW"
+
+    $Recommendation = @"
+Recommended:
+- Windows 10 Pro
+- Office Web
+- Office LTSC light usage
+- Avoid Windows 11
+- Avoid heavy security stack
+- Upgrade SSD strongly recommended
+"@
+
+    Warn "Low-end machine detected"
 }
-else {
-    Warn "Windows may not be permanently activated"
-    $Risk += 1
-    $Findings += "Non-permanent activation"
+
+# -----------------------------------------
+# MID RANGE
+# -----------------------------------------
+
+elseif (
+    $RAMGB -ge 8 -and
+    $DiskType -match "SSD|NVMe"
+) {
+
+    $Level = "MID"
+
+    $Recommendation = @"
+Recommended:
+- Windows 10 Pro
+- Microsoft 365 Business Standard
+- Office Desktop Apps
+- Teams acceptable
+- Optional Intune
+"@
+
+    Good "Mid-range machine detected"
+}
+
+# -----------------------------------------
+# HIGH END
+# -----------------------------------------
+
+if (
+    $RAMGB -ge 16 -and
+    $DiskType -match "SSD|NVMe" -and
+    $TPMEnabled
+) {
+
+    $Level = "HIGH"
+
+    $Recommendation = @"
+Recommended:
+- Windows 11 Pro / Enterprise
+- Microsoft 365 Business Premium
+- Intune
+- Defender for Business
+- Full security stack
+"@
+
+    Good "High-end machine detected"
 }
 
 # =========================================
-# REGISTRY KMS CHECK
+# OUTPUT
 # =========================================
 
 Write-Host ""
-Info "Checking KMS registry..."
-
-$kmsReg = reg query `
-"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform" `
-/v KeyManagementServiceName 2>$null
-
-if ($kmsReg) {
-    Bad "KMS server registry found"
-    Write-Host $kmsReg
-
-    $Risk += 3
-    $Findings += "KMS registry detected"
-}
-else {
-    Good "No KMS registry"
-}
+Write-Host $Recommendation -ForegroundColor White
 
 # =========================================
-# SCHEDULED TASKS
-# =========================================
-
-Write-Host ""
-Info "Checking scheduled tasks..."
-
-$tasks = Get-ScheduledTask | Where-Object {
-    $_.TaskName -match "KMS|MAS|AutoPico|Activator"
-}
-
-if ($tasks) {
-
-    foreach ($t in $tasks) {
-        Bad "Suspicious task: $($t.TaskName)"
-        $Risk += 2
-        $Findings += "Suspicious task: $($t.TaskName)"
-    }
-}
-else {
-    Good "No suspicious scheduled tasks"
-}
-
-# =========================================
-# SERVICES
-# =========================================
-
-Write-Host ""
-Info "Checking suspicious services..."
-
-$services = Get-Service | Where-Object {
-    $_.Name -match "KMS|Pico|Activator"
-}
-
-if ($services) {
-
-    foreach ($s in $services) {
-        Bad "Suspicious service: $($s.Name)"
-        $Risk += 2
-        $Findings += "Suspicious service: $($s.Name)"
-    }
-}
-else {
-    Good "No suspicious services"
-}
-
-# =========================================
-# FINAL RESULT
-# =========================================
-
-Write-Host ""
-Write-Host "===== FINAL RESULT =====" -ForegroundColor White
-Write-Host ""
-
-Write-Host "Risk Score: $Risk"
-
-if ($Risk -eq 0) {
-    Good "System appears legitimate"
-}
-elseif ($Risk -le 3) {
-    Warn "Possibly legitimate but check manually"
-}
-else {
-    Bad "High probability of KMS/crack activation"
-}
-
-# =========================================
-# JSON OUTPUT
+# JSON EXPORT
 # =========================================
 
 $Output = [PSCustomObject]@{
     Computer = $env:COMPUTERNAME
-    User = $env:USERNAME
-    Time = Get-Date
-    RiskScore = $Risk
-    Findings = $Findings
-    Licenses = $LicenseResults
+    CPU = $CPUName
+    RAMGB = $RAMGB
+    Disk = $DiskType
+    TPM = $TPMEnabled
+    Level = $Level
+    Recommendation = $Recommendation
 }
 
 Write-Host ""
-Write-Host "===== JSON OUTPUT =====" -ForegroundColor White
+Write-Host "===== JSON =====" -ForegroundColor Cyan
 Write-Host ""
 
-$Output | ConvertTo-Json -Depth 5
+$Output | ConvertTo-Json -Depth 3
