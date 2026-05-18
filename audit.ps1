@@ -1,6 +1,6 @@
 # =========================================
-# ENTERPRISE HARDWARE AUDIT
-# Windows + Microsoft 365 Recommendation
+# ENTERPRISE DEVICE + LICENSE AUDIT
+# Hardware + Microsoft 365 Recommendation
 # =========================================
 
 Clear-Host
@@ -26,17 +26,17 @@ function Info($msg) {
 }
 
 Write-Host ""
-Write-Host "===== ENTERPRISE HARDWARE AUDIT =====" -ForegroundColor Cyan
+Write-Host "===== ENTERPRISE DEVICE AUDIT =====" -ForegroundColor Cyan
 Write-Host ""
 
 # =========================================
-# OS INFO
+# OS
 # =========================================
 
 $OS = Get-CimInstance Win32_OperatingSystem
 
 # =========================================
-# CPU INFO
+# CPU
 # =========================================
 
 $CPU = Get-CimInstance Win32_Processor
@@ -44,17 +44,43 @@ $CPU = Get-CimInstance Win32_Processor
 $CPUName = $CPU.Name.Trim()
 $Cores = $CPU.NumberOfCores
 $Threads = $CPU.NumberOfLogicalProcessors
-$CPUSpeed = $CPU.MaxClockSpeed
+$Clock = $CPU.MaxClockSpeed
 
 # =========================================
-# RAM INFO
+# RAM
 # =========================================
 
 $RAM = Get-CimInstance Win32_ComputerSystem
 $RAMGB = [math]::Round($RAM.TotalPhysicalMemory / 1GB)
 
 # =========================================
-# STORAGE DETECTION
+# RAM TYPE
+# =========================================
+
+$RamModules = Get-CimInstance Win32_PhysicalMemory
+
+$RamTypes = @()
+
+foreach ($r in $RamModules) {
+
+    $Type = switch ($r.SMBIOSMemoryType) {
+
+        20 { "DDR" }
+        21 { "DDR2" }
+        24 { "DDR3" }
+        26 { "DDR4" }
+        34 { "DDR5" }
+
+        default { "Unknown" }
+    }
+
+    $RamTypes += $Type
+}
+
+$RamGeneration = ($RamTypes | Select-Object -Unique) -join ", "
+
+# =========================================
+# STORAGE
 # Detect Windows Drive Only
 # =========================================
 
@@ -68,7 +94,6 @@ try {
 
     $DiskName = $SystemDisk.FriendlyName
 
-    # Try enterprise method first
     $PhysicalDisks = Get-PhysicalDisk -ErrorAction SilentlyContinue
 
     if ($PhysicalDisks) {
@@ -91,12 +116,12 @@ try {
         }
     }
 
-    # Fallback Detection
+    # fallback
     if ($DiskType -eq "Unknown") {
 
         if (
             $DiskName -match
-            "SSD|NVMe|KINGSTON|SAMSUNG|WD_BLACK|SN[0-9]|MZVL|PM9A|970|980|990"
+            "SSD|NVMe|KINGSTON|SAMSUNG|WD_BLACK|SN[0-9]|970|980|990|SU800"
         ) {
 
             $DiskType = "SSD"
@@ -132,7 +157,7 @@ catch {
 }
 
 # =========================================
-# WINDOWS LICENSE
+# LICENSE
 # =========================================
 
 $License = Get-CimInstance SoftwareLicensingProduct |
@@ -161,7 +186,7 @@ elseif ($License.Description -match "MAK") {
 }
 
 # =========================================
-# DISPLAY INFO
+# DISPLAY
 # =========================================
 
 Write-Host "Computer     : $env:COMPUTERNAME"
@@ -169,7 +194,9 @@ Write-Host "OS           : $($OS.Caption)"
 Write-Host "CPU          : $CPUName"
 Write-Host "Cores        : $Cores"
 Write-Host "Threads      : $Threads"
+Write-Host "Clock MHz    : $Clock"
 Write-Host "RAM          : $RAMGB GB"
+Write-Host "RAM Type     : $RamGeneration"
 Write-Host "Disk         : $DiskType"
 Write-Host "Disk Model   : $DiskName"
 Write-Host "TPM          : $TPMEnabled"
@@ -189,6 +216,17 @@ elseif ($RAMGB -ge 8) {
     $Score += 2
 }
 else {
+    $Score += 1
+}
+
+# RAM TYPE
+if ($RamGeneration -match "DDR5") {
+    $Score += 3
+}
+elseif ($RamGeneration -match "DDR4") {
+    $Score += 2
+}
+elseif ($RamGeneration -match "DDR3") {
     $Score += 1
 }
 
@@ -224,80 +262,98 @@ Write-Host ""
 Write-Host "===== RECOMMENDATION =====" -ForegroundColor Cyan
 Write-Host ""
 
-$Level = ""
-$Recommendation = ""
+$Tier = ""
+$WindowsPlan = ""
+$M365Plan = ""
+$Notes = ""
 
-# -----------------------------------------
-# LOW-END
-# -----------------------------------------
+# LOW
+if ($Score -le 6) {
 
-if ($Score -le 5) {
+    $Tier = "LOW-END"
 
-    $Level = "LOW"
+    $WindowsPlan = "Windows 10 Pro"
+    $M365Plan = "Office Web / Office LTSC"
 
-    $Recommendation = @"
-Recommended:
-- Windows 10 Pro
-- Office Web Apps
-- Office LTSC light usage
-- Avoid Windows 11
-- Avoid heavy security stack
-- SSD upgrade strongly recommended
+    $Notes = @"
+- Suitable for:
+  Telesale
+  Reception
+  Basic Office
+
+- Avoid:
+  Windows 11
+  Heavy Defender stack
+  Intune full compliance
+
+- Strongly recommend SSD upgrade
 "@
 
     Warn "Low-end machine detected"
 }
 
-# -----------------------------------------
-# MID-RANGE
-# -----------------------------------------
+# MID
+elseif ($Score -le 10) {
 
-elseif ($Score -le 8) {
+    $Tier = "MID-RANGE"
 
-    $Level = "MID"
+    $WindowsPlan = "Windows 10/11 Pro"
+    $M365Plan = "Microsoft 365 Business Standard"
 
-    $Recommendation = @"
-Recommended:
-- Windows 10 Pro
-- Microsoft 365 Business Standard
-- Office Desktop Apps
-- Teams acceptable
+    $Notes = @"
+- Suitable for:
+  Marketing
+  Content
+  CSKH
+  Office Staff
+
+- Teams Desktop acceptable
 - Optional Intune
 "@
 
     Good "Mid-range machine detected"
 }
 
-# -----------------------------------------
-# HIGH-END
-# -----------------------------------------
-
+# HIGH
 else {
 
-    $Level = "HIGH"
+    $Tier = "HIGH-END"
 
-    $Recommendation = @"
-Recommended:
-- Windows 11 Pro / Enterprise
-- Microsoft 365 Business Premium
-- Intune
-- Defender for Business
-- Full security stack
+    $WindowsPlan = "Windows 11 Pro / Enterprise"
+    $M365Plan = "Microsoft 365 Business Premium"
+
+    $Notes = @"
+- Suitable for:
+  IT
+  Manager
+  Accounting
+  Sensitive data users
+
+- Recommended:
+  Intune
+  BitLocker
+  Defender for Business
+  MFA
+  Compliance Policy
 "@
 
     Good "High-end machine detected"
 }
 
 # =========================================
-# SHOW RESULT
+# OUTPUT
 # =========================================
 
 Write-Host ""
-Write-Host "Performance Score : $Score / 11"
-Write-Host "Machine Tier      : $Level"
+Write-Host "Performance Score : $Score"
+Write-Host "Machine Tier      : $Tier"
 
 Write-Host ""
-Write-Host $Recommendation -ForegroundColor White
+Write-Host "Windows Plan      : $WindowsPlan"
+Write-Host "M365 Plan         : $M365Plan"
+
+Write-Host ""
+Write-Host $Notes -ForegroundColor White
 
 # =========================================
 # JSON EXPORT
@@ -306,14 +362,16 @@ Write-Host $Recommendation -ForegroundColor White
 $Output = [PSCustomObject]@{
 
     Computer = $env:COMPUTERNAME
+
     OS = $OS.Caption
 
     CPU = $CPUName
     Cores = $Cores
     Threads = $Threads
-    ClockMHz = $CPUSpeed
+    ClockMHz = $Clock
 
     RAMGB = $RAMGB
+    RAMType = $RamGeneration
 
     DiskType = $DiskType
     DiskModel = $DiskName
@@ -323,13 +381,16 @@ $Output = [PSCustomObject]@{
     License = $LicenseChannel
 
     Score = $Score
-    Tier = $Level
+    Tier = $Tier
 
-    Recommendation = $Recommendation
+    WindowsPlan = $WindowsPlan
+    M365Plan = $M365Plan
+
+    Notes = $Notes
 }
 
 Write-Host ""
 Write-Host "===== JSON =====" -ForegroundColor Cyan
 Write-Host ""
 
-$Output | ConvertTo-Json -Depth 4
+$Output | ConvertTo-Json -Depth 5
